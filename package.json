@@ -1,0 +1,7 @@
+{
+  "name": "omp-skills",
+  "version": "0.1.0",
+  "private": true,
+  "description": "deep-interview, ralplan, and DAG-with-critic pipeline skills for omp",
+  "omp": { "extensions": ["./index.ts"] }
+}
