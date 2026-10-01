@@ -1,1 +1,8 @@
 node_modules/
+__pycache__/
+*.tmp
+.omm/
+# Runtime state of the OMC harness. `.omc/*` rather than `.omc/`: git cannot
+# re-include a path whose parent directory is excluded.
+.omc/*
+!.omc/skills/
