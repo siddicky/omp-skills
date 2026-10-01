@@ -1,6 +1,6 @@
 # omp-skills
 
-Pipeline skills for [Oh My Pi (omp)](https://ohmypai.dev): a gated path from a
+Pipeline skills for [Oh My Pi (omp)](https://omp.sh): a gated path from a
 vague request to parallel, critic-gated execution.
 
 ```
@@ -15,54 +15,73 @@ vague request to parallel, critic-gated execution.
 ```
 
 Ported from oh-my-musecode's Tier-0 pipeline (`deep-interview → ralplan →
-ralph`), replacing muse primitives with omp ones: `ask` for every user gate,
-`task`/`eval agent()` for subagents, and a custom `critic` task agent instead
-of an external CLI reviewer.
+ralph`), using omp's `ask`, `task`/`wait`, eval `agent()`, and a custom `critic`
+agent. All three skills set `hide: true`, so omp does not list them to the model
+and nothing auto-fires them: you invoke them with `/skill:<name>`, and each tells
+you what to run next, then stops. The full procedure of each is its
+`skills/<name>/SKILL.md`; this file only summarises.
 
-All three skills are **explicit-invocation only** — nothing auto-fires them.
-Sequencing between stages is by prose: each skill tells you what to run next
-and then stops.
+## Requirements
+
+- omp 18.4 or newer (developed against 18.4.5; the `hub` tool is gone since
+  18.3.0). The skills use `ask`, `task`, `wait`, `read`, `write`, `bash`, and
+  `eval` (Python, for `dag` and ralplan's validation step).
+- Not in plan mode: it makes subagents read-only and blocks writes to the working
+  tree. With isolation on, omp rejects the `agent()` spawn and the run aborts;
+  with isolation off no worker can edit a file, so every node that has to change
+  one ends up `blocked` with its dependents `skipped`. The runner cannot detect
+  plan mode, so each skill checks the system prompt and stops. If
+  `plan.defaultOnStartup` is on, leave plan mode before running a skill.
+- A persistent Python kernel (the default `python.kernelMode: session`): the dag
+  cells share names.
 
 ## Install
 
-Append to `~/.omp/agent/config.yml` (create the key if absent):
+Append to `~/.omp/agent/config.yml`:
 
 ```yaml
 extensions:
-  - /Users/siddicky/Projects/github/omp-skills
+  - <path-to>/omp-skills
 ```
 
-Restart omp. Then verify:
+`<path-to>` is wherever you cloned this repo. Restart omp, then check that
+`/skill:` autocomplete lists `deep-interview`, `ralplan`, `dag` and `/agents`
+lists `critic` (tools: `read, grep, glob, bash`). No `index.ts` or `package.json`
+entry is needed: omp discovers `skills/` and `agents/` in any `extensions:` root.
 
-- `/skill:` autocomplete lists `deep-interview`, `ralplan`, `dag`
-- `/agents` lists `critic` (tools: `read, grep, glob, bash`)
+A project's `.omp/config.yml` `extensions:` list replaces the user list instead
+of merging with it: add this repo there too, or `/skill:dag` disappears and the
+other two can resolve to same-named skills from other packs.
 
-If `critic` does not appear in `/agents` but the skills do, copy
-`agents/critic.md` to `~/.omp/agent/agents/critic.md` — project/user agent
-dirs always load.
+Do not copy `agents/critic.md` into `~/.omp/agent/agents/`: a user-level agent
+shadows the one here and drifts. Delete an old copy or symlink it to
+`agents/critic.md`.
 
 ## State
 
-Pipeline state lives under `.omp/pipeline/` in each project:
+Pipeline state lives under `.omp/pipeline/` in each project (add it to
+`.gitignore`; it collides with nothing omp discovers under `.omp/`):
 
 | Path | Written by | Contents |
 | --- | --- | --- |
-| `.omp/pipeline/specs/<slug>.md` | deep-interview | approved specs |
-| `.omp/pipeline/prd.json` | ralplan | the PRD |
-| `.omp/pipeline/dag/<slug>.json` | dag | runnable DAG + per-node status |
-
-`.omp/` is also where omp discovers project agents, extensions, and skills;
-the `pipeline/` subdirectory collides with none of those. Recommend adding
-`.omp/pipeline/` to each project's `.gitignore`.
+| `.omp/pipeline/specs/<slug>.md` | deep-interview | specs; line 1 is `<!-- APPROVED YYYY-MM-DD -->` or `<!-- UNAPPROVED DRAFT -->` |
+| `.omp/pipeline/prd.json` | ralplan; dag mirrors terminal statuses into it | the PRD |
+| `.omp/pipeline/dag/<slug>.json` | dag | runnable DAG + per-node status (the state file) |
 
 ## The critic agent
 
-`agents/critic.md` defines a read-only adversarial reviewer with a structured
-output schema (`verdict: approve|revise`, ranked `findings`). `ralplan` uses
-it to review the PRD; `dag` uses it to gate every node. Approve requires zero
-blocker and zero major findings.
+`agents/critic.md` is an adversarial reviewer with a structured output schema
+(`verdict: approve|revise`, ranked `findings`, each optionally `target:
+work|plan`). It has `bash` for acceptance commands and read-only git, but omp does
+not enforce that: it is a rule it follows, not a sandbox. Approve requires zero
+blocker and zero major findings, and the runner recomputes the verdict from the
+findings instead of trusting the critic's word. An answer that is not a clear
+`approve`/`revise` plus a findings list never approves a node (omp drops the
+output schema after three failed validations and passes the raw data through).
+The schema in `agents/critic.md` and `CRITIC_SCHEMA` in `skills/dag/runner.py`
+must stay identical.
 
-To route critic reviews through a different model, map the agent:
+To route critic reviews through a different model:
 
 ```yaml
 task:
@@ -72,17 +91,64 @@ task:
 
 ## DAG semantics
 
-- A node starts as soon as all of its `depends_on` nodes are approved — not
-  in lockstep waves.
-- Every node's output passes a `critic` review; `revise` feeds the findings
-  back into a retry (default 2 attempts), then the node is `blocked`.
-- Dependents of a `blocked` or `skipped` node are `skipped`, never run on a
-  stale premise.
-- Without `task.isolation.enabled`, concurrent nodes are kept safe by
-  disjoint `files` ownership; the runner rejects a DAG where two
-  non-dependent nodes own the same file pattern.
-- State persists to the DAG file after every transition: Ctrl-C aborts the
-  run, re-invoking `/skill:dag <same path>` resumes (done nodes are not
-  re-run). Top-level `"retry_blocked": true` re-attempts blocked nodes.
+Details are in `skills/dag/SKILL.md`.
 
-See `skills/dag/example.json` for a minimal four-node fixture.
+- A node starts as soon as its `depends_on` nodes are approved, not in waves.
+  Concurrent agents are capped by `task.maxConcurrency` (omp's default is 32, so
+  unset means 16: the runner never uses more than 16, and uses 4 only when it
+  cannot read a positive number, for example omp is not on `PATH` or the setting
+  is 0, which omp reads as unlimited).
+- Every node passes a `critic`; `revise` feeds the findings into a retry (default
+  2 attempts), then the node is `blocked`. A failed worker, or an unusable critic
+  answer, is retried and never approves. A blocker or major finding with
+  `target: plan` blocks the node at once (`plan defect:`). Dependents of a
+  `blocked` or `skipped` node are `skipped`; statuses are `pending`, `running`,
+  `review`, `done`, `blocked`, `skipped`.
+- `files` is required on every node: the paths or globs it may edit, `[]` for a
+  read-only node. Overlapping `files` between nodes with no dependency path are
+  rejected unless workers are isolated (`task.isolation.enabled` and a git work
+  tree), where omp applies a worker's patch before the critic reviews it: the
+  gate stops dependents, not integration. Isolation is read with
+  `omp config get`, that is from config.yml (global or project); a per-run
+  `omp --config <overlay>` is not visible to `detect_isolation()`, so such a run
+  proceeds without isolation and with the overlap check on (fails safe). Case is
+  ignored, as on a default macOS volume.
+- State is saved atomically after every transition. Esc aborts the run (Ctrl+C
+  only clears the editor); `/skill:dag <state path>` resumes it, `done` nodes are
+  not re-run, and blocked nodes are retried only when you choose to.
+- A source is never run in place: a PRD or explicit file is copied to
+  `.omp/pipeline/dag/<slug>.json`, and an existing state file is resumed, never
+  overwritten, unless you choose Restart. If the source's plan (goal, ids, titles,
+  tasks, criteria, dependencies, files, agents; not statuses or approval stamps)
+  changed since, dag says what changed and asks Restart or Cancel; to finish the
+  old run pass its state path, and its statuses are then not copied into the
+  re-planned PRD. A source that is no longer approved is refused.
+
+`skills/dag/example.json` is a minimal approved four-node fixture (run it in a
+throwaway directory: its nodes create `greeting.txt`, `name.txt`, and `hello.txt`).
+
+## Optional: TypeSafe checks
+
+Off by default. Two advisory checks use omp's `judge_batch` (TypeSafe System One):
+a lint of criteria that name no command or pass condition, and a screen that
+compares a worker's own evidence with each criterion. They need a TypeSafe
+credential (`TYPESAFE_API_KEY` or `/login typesafe`); without one omp falls back
+to chat models and the pack ignores those answers.
+
+Enable per DAG with a top-level `"typesafe"` key in the DAG or PRD file (`true`, a
+word such as `"shadow"`, or `{"lint": true, "screen": "off|shadow|enforce"}`), or
+for the session with `env("OMP_SKILLS_TYPESAFE", "shadow")` (or `"enforce"`) in
+an eval cell. A variable exported before launching omp does not work: omp starts
+the eval kernel with an allowlisted environment, so TypeSafe stays off silently
+(Cell 2 prints the mode it found). `TYPESAFE_API_KEY` is read by the omp host, so
+exporting it does work. The checks fail open, redact secrets from the evidence
+they send (by shape, so a secret with none, such as a bare 40-character hex string, still
+passes), and never
+approve anything: only the critic does. Run `shadow` first; criteria text and
+evidence leave the machine.
+
+## Tests
+
+```
+uv run python -m unittest discover -s tests -v
+```

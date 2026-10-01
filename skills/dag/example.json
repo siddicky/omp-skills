@@ -8,7 +8,7 @@
       "title": "Write greeting",
       "task": "Create the file greeting.txt in the current working directory containing exactly the single line: Hello",
       "acceptance_criteria": [
-        "`cat greeting.txt` prints exactly `Hello`"
+        "`printf 'Hello\\n' | cmp -s - greeting.txt` exits 0"
       ],
       "depends_on": [],
       "files": ["greeting.txt"],
@@ -20,7 +20,7 @@
       "title": "Write name",
       "task": "Create the file name.txt in the current working directory containing exactly the single line: World",
       "acceptance_criteria": [
-        "`cat name.txt` prints exactly `World`"
+        "`printf 'World\\n' | cmp -s - name.txt` exits 0"
       ],
       "depends_on": [],
       "files": ["name.txt"],
@@ -32,8 +32,8 @@
       "title": "Concatenate",
       "task": "Concatenate greeting.txt and name.txt (each already exists) into hello.txt, joined with a single space and no trailing newline",
       "acceptance_criteria": [
-        "`cat hello.txt` prints exactly `Hello World`",
-        "`wc -c hello.txt` prints `11 hello.txt`"
+        "`printf 'Hello World' | cmp -s - hello.txt` exits 0",
+        "`test \"$(wc -c < hello.txt | tr -d ' ')\" = 11` exits 0"
       ],
       "depends_on": ["N-001", "N-002"],
       "files": ["hello.txt"],
@@ -43,9 +43,9 @@
     {
       "id": "N-004",
       "title": "Verify word count",
-      "task": "Verify the word count of hello.txt (do not modify any file)",
+      "task": "Verify the word count of hello.txt. This is a read-only node: do not create, modify, or delete any file.",
       "acceptance_criteria": [
-        "`wc -w hello.txt` prints `2 hello.txt`"
+        "`test \"$(wc -w < hello.txt | tr -d ' ')\" = 2` exits 0"
       ],
       "depends_on": ["N-003"],
       "files": [],
